@@ -1,0 +1,59 @@
+name: Deploy to Cloud Run
+
+on:
+  push:
+    branches: [ main ]
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - id: auth
+        name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Configure Docker for Artifact Registry
+        run: gcloud auth configure-docker europe-west1-docker.pkg.dev --quiet
+
+      - name: Create Artifact Registry repo (if not exists)
+        run: |
+          gcloud artifacts repositories describe smart-election-assistant \
+            --location=europe-west1 --project=${{ secrets.GCP_PROJECT_ID }} \
+            || gcloud artifacts repositories create smart-election-assistant \
+              --repository-format=docker \
+              --location=europe-west1 \
+              --project=${{ secrets.GCP_PROJECT_ID }}
+
+      - name: Build and push Docker image
+        run: |
+          IMAGE=europe-west1-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/smart-election-assistant/app
+          docker build -t $IMAGE .
+          docker push $IMAGE
+
+      - name: Deploy to Cloud Run
+        run: |
+          IMAGE=europe-west1-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/smart-election-assistant/app
+          gcloud run deploy smart-election-assistant \
+            --image $IMAGE \
+            --region europe-west1 \
+            --platform managed \
+            --allow-unauthenticated \
+            --port 5000 \
+            --project ${{ secrets.GCP_PROJECT_ID }} \
+            --set-env-vars "NODE_ENV=production,PORT=5000,MONGODB_URI=${{ secrets.MONGODB_URI }},REDIS_URL=${{ secrets.REDIS_URL }},JWT_SECRET=${{ secrets.JWT_SECRET }},GEMINI_API_KEY=${{ secrets.GEMINI_API_KEY }}"
+
+      - name: Print service URL
+        run: |
+          gcloud run services describe smart-election-assistant \
+            --region europe-west1 \
+            --project ${{ secrets.GCP_PROJECT_ID }} \
+            --format "value(status.url)"
